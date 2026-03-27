@@ -71,23 +71,37 @@ workflow-orchestration-queue represents a paradigm shift from **Interactive AI C
 2. **Configure environment:**
    ```bash
    cp .env.example .env
-   # Edit .env with your credentials
+   # Edit .env with your credentials:
+   # - Set ZHIPU_API_KEY for AI model access
+   # - Set GH_ORCHESTRATION_AGENT_TOKEN with required scopes
+   # - Set GITHUB_TOKEN for queue operations
+   # - Set GITHUB_ORG and GITHUB_REPO to match your repository
    ```
 
 3. **Install dependencies:**
    ```bash
-   uv pip install -e ".[dev]"
+   uv sync
    ```
 
 4. **Run the notifier service:**
    ```bash
-   python -m orchestration_queue.notifier_service
+   uv run uvicorn orchestration_queue.notifier_service:app --reload
    ```
 
 5. **Run the sentinel orchestrator:**
    ```bash
-   python -m orchestration_queue.orchestrator_sentinel
+   uv run python -m orchestration_queue.orchestrator_sentinel
    ```
+
+### DevContainer Development
+
+This repository includes a preconfigured DevContainer with all required tools:
+
+1. Open in VS Code with DevContainers extension
+2. When prompted, reopen in container
+3. The container auto-starts `opencode serve` on port 4096
+
+See `.devcontainer/devcontainer.json` for configuration details.
 
 ### Docker Deployment
 
@@ -152,14 +166,47 @@ agent:queued → agent:in-progress → agent:success
 
 ## Configuration
 
+### Required Environment Variables
+
+Copy `.env.example` to `.env` and configure the following variables:
+
+```bash
+cp .env.example .env
+```
+
+#### GitHub Authentication
+
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `GITHUB_TOKEN` | GitHub PAT for API access | Yes |
+| `GH_ORCHESTRATION_AGENT_TOKEN` | GitHub PAT with `repo`, `workflow`, `project`, `read:org` scopes | Yes |
+| `GITHUB_TOKEN` | GitHub PAT for queue operations (Issues API) | Yes |
 | `GITHUB_ORG` | GitHub organization name | Yes |
 | `GITHUB_REPO` | GitHub repository name | Yes |
-| `WEBHOOK_SECRET` | HMAC webhook secret | Recommended |
-| `SENTINEL_BOT_LOGIN` | Sentinel's GitHub username | For claiming |
-| `LOG_LEVEL` | Logging level | No (default: INFO) |
+
+#### AI Model Providers
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `ZHIPU_API_KEY` | ZhipuAI API key for GLM models (primary) | Yes |
+| `KIMI_CODE_ORCHESTRATOR_AGENT_API_KEY` | Kimi/Moonshot API key (backup) | No |
+
+#### Optional Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `WEBHOOK_SECRET` | HMAC webhook secret for signature verification | - |
+| `SENTINEL_BOT_LOGIN` | Sentinel's GitHub username for task claiming | - |
+| `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO |
+| `POLL_INTERVAL` | Sentinel polling interval in seconds | 60 |
+| `HEARTBEAT_INTERVAL` | Heartbeat interval in seconds | 300 |
+| `SUBPROCESS_TIMEOUT` | Worker subprocess timeout in seconds | 5700 |
+
+### Security Notes
+
+- **Never commit `.env` files** - They are excluded via `.gitignore`
+- Use `WEBHOOK_SECRET` in production for HMAC signature verification
+- Rotate API keys periodically
+- Use minimal required scopes for GitHub tokens
 
 ## Documentation
 
