@@ -37,10 +37,11 @@ devcontainer exec --workspace-folder "$REPO_ROOT" --config "$DEVCONTAINER_CONFIG
   bash test/test-devcontainer-tools.sh
 echo ""
 
-# Step 4: Run Docker resource verification tests
-echo "--- Step 4: Running Docker resource verification tests ---"
-devcontainer exec --workspace-folder "$REPO_ROOT" --config "$DEVCONTAINER_CONFIG" \
-  bash test/test-devcontainer-resources.sh
+# Step 4: Run Docker resource verification tests from host context
+# Note: These tests must run from the host to inspect Docker resources.
+# Running inside the container would fail without Docker socket access.
+echo "--- Step 4: Running Docker resource verification tests (from host) ---"
+bash test/test-devcontainer-resources.sh
 echo ""
 
 # Step 5: Run prompt assembly tests inside the container

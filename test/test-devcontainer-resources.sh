@@ -26,6 +26,15 @@ get_container_id() {
     docker ps -aq --latest --filter "label=devcontainer.local_folder=${workspace}" 2>/dev/null || echo ""
 }
 
+# Helper to get the active container ID for tests
+_get_test_container_id() {
+    if is_inside_devcontainer; then
+        hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo ""
+    else
+        get_container_id "$REPO_ROOT"
+    fi
+}
+
 # Test 1: Check Docker is available
 test_docker_available() {
     echo "--- Test 1: Docker availability ---"
@@ -48,13 +57,7 @@ test_docker_network() {
         return
     fi
     
-    local container_id=""
-    if is_inside_devcontainer; then
-        # When inside, get the container ID from hostname
-        container_id=$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")
-    else
-        container_id=$(get_container_id "$REPO_ROOT")
-    fi
+    local container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
@@ -92,12 +95,7 @@ test_docker_volumes() {
         return
     fi
     
-    local container_id=""
-    if is_inside_devcontainer; then
-        container_id=$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")
-    else
-        container_id=$(get_container_id "$REPO_ROOT")
-    fi
+    local container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
@@ -113,20 +111,16 @@ test_docker_volumes() {
         PASS=$((PASS + 1))
         echo "  INFO: Mounts: $mounts"
         
-        # Check for workspace mount
+        # Check for workspace mount (Docker destinations are absolute paths)
+        local workspace_dest="/workspaces/$(basename "$REPO_ROOT")"
         if docker inspect --format '{{range .Mounts}}{{if eq .Destination "/workspaces"}}{{.Source}}{{end}}{{end}}' "$container_id" 2>/dev/null | grep -q .; then
             echo "  PASS: Workspace volume is mounted"
             PASS=$((PASS + 1))
+        elif docker inspect --format '{{range .Mounts}}{{if eq .Destination "'"${workspace_dest}"'"}}{{.Source}}{{end}}{{end}}' "$container_id" 2>/dev/null | grep -q .; then
+            echo "  PASS: Workspace volume is mounted at ${workspace_dest}"
+            PASS=$((PASS + 1))
         else
-            # Alternative check - some devcontainers mount directly to repo path
-            local workspace_mount
-            workspace_mount=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "'"$(basename "$REPO_ROOT")"'"}}{{.Source}}{{end}}{{end}}' "$container_id" 2>/dev/null || echo "")
-            if [[ -n "$workspace_mount" ]]; then
-                echo "  PASS: Workspace volume is mounted (alternative path)"
-                PASS=$((PASS + 1))
-            else
-                echo "  INFO: No explicit workspace mount found (may use bind mount)"
-            fi
+            echo "  INFO: No explicit workspace mount found (may use bind mount)"
         fi
     else
         echo "  FAIL: Container has no mounted volumes"
@@ -174,12 +168,7 @@ test_container_labels() {
         return
     fi
     
-    local container_id=""
-    if is_inside_devcontainer; then
-        container_id=$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")
-    else
-        container_id=$(get_container_id "$REPO_ROOT")
-    fi
+    local container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
@@ -207,12 +196,7 @@ test_container_state() {
         return
     fi
     
-    local container_id=""
-    if is_inside_devcontainer; then
-        container_id=$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")
-    else
-        container_id=$(get_container_id "$REPO_ROOT")
-    fi
+    local container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
