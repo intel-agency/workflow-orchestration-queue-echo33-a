@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     heartbeat_interval: float = 300.0  # 5 minutes
     subprocess_timeout: float = 5700.0  # 95 minutes (safety net)
 
+    # Backoff configuration
+    backoff_base_seconds: float = 5.0  # Base backoff interval
+    backoff_max_seconds: float = 300.0  # Maximum backoff (5 minutes)
+
     # Shell bridge configuration
     shell_bridge_path: str = "./scripts/devcontainer-opencode.sh"
 
@@ -135,8 +139,8 @@ class SentinelOrchestrator:
         """Calculate backoff with jitter.
 
         Uses exponential backoff with:
-        - Base: 5 seconds
-        - Cap: 300 seconds (5 minutes)
+        - Base: configurable via settings.backoff_base_seconds
+        - Cap: configurable via settings.backoff_max_seconds
         - Jitter: +0-25% randomization
 
         Args:
@@ -145,8 +149,8 @@ class SentinelOrchestrator:
         Returns:
             Backoff time in seconds with jitter applied
         """
-        base = 5.0  # 5 seconds
-        max_backoff = 300.0  # 5 minutes
+        base = settings.backoff_base_seconds
+        max_backoff = settings.backoff_max_seconds
 
         # Exponential backoff with cap
         backoff = min(base * (2**consecutive_errors), max_backoff)
@@ -173,8 +177,9 @@ class SentinelOrchestrator:
                 consecutive_errors = 0
 
             except Exception as e:
-                consecutive_errors += 1
+                # Calculate backoff BEFORE incrementing to use base on first error
                 backoff = self._calculate_backoff(consecutive_errors)
+                consecutive_errors += 1
                 logger.error(
                     "Error in polling cycle (attempt %d): %s - backing off for %.1fs",
                     consecutive_errors,
@@ -205,9 +210,6 @@ class SentinelOrchestrator:
 
     async def _poll_and_process(self) -> None:
         """Poll for tasks and process one if available."""
-        # Reset environment before each poll to ensure clean state
-        await self._reset_environment()
-
         queue = await self._get_queue()
 
         logger.debug("Polling for queued tasks...")

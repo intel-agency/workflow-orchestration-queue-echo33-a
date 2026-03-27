@@ -30,6 +30,8 @@ class TestCalculateBackoff:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     def test_backoff_increases_on_consecutive_errors(self, mock_settings: None) -> None:
@@ -140,6 +142,8 @@ class TestPollingLoopBackoff:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -234,10 +238,11 @@ class TestPollingLoopBackoff:
             await sentinel._run_polling_loop()
 
         # Verify _calculate_backoff was called with increasing error counts
+        # Note: consecutive_errors starts at 0, so first error uses backoff(0)
         assert len(calculated_backoffs) >= 3
-        assert calculated_backoffs[0][0] == 1  # First error
-        assert calculated_backoffs[1][0] == 2  # Second error
-        assert calculated_backoffs[2][0] == 3  # Third error
+        assert calculated_backoffs[0][0] == 0  # First error (base backoff)
+        assert calculated_backoffs[1][0] == 1  # Second error
+        assert calculated_backoffs[2][0] == 2  # Third error
 
 
 class TestResetEnvironment:
@@ -256,6 +261,8 @@ class TestResetEnvironment:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -391,6 +398,8 @@ class TestResetEnvironmentIntegration:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -473,26 +482,6 @@ class TestResetEnvironmentIntegration:
             await sentinel._execute_task(task)
 
             # Verify reset was still called in finally block
-            mock_reset.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_reset_called_at_poll_start(self, mock_settings: None) -> None:
-        """Test that _reset_environment is called at start of _poll_and_process."""
-        from unittest.mock import AsyncMock
-
-        sentinel = SentinelOrchestrator()
-
-        # Create mock queue with async fetch_queued_tasks
-        mock_queue = AsyncMock()
-        mock_queue.fetch_queued_tasks = AsyncMock(return_value=[])
-
-        with (
-            patch.object(sentinel, "_reset_environment") as mock_reset,
-            patch.object(sentinel, "_get_queue", return_value=mock_queue),
-        ):
-            await sentinel._poll_and_process()
-
-            # Verify reset was called before fetching tasks
             mock_reset.assert_called_once()
 
 
@@ -605,6 +594,8 @@ class TestGetQueue:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -645,6 +636,8 @@ class TestRunCommand:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -795,6 +788,8 @@ class TestRunShellBridge:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -908,6 +903,8 @@ class TestBuildInstruction:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     def test_build_instruction_plan_task(self, mock_settings: None) -> None:
@@ -1016,6 +1013,8 @@ class TestHeartbeatLoop:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -1118,6 +1117,8 @@ class TestGracefulShutdown:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     def test_handle_shutdown_signal_sets_event(self, mock_settings: None) -> None:
@@ -1225,6 +1226,8 @@ class TestFormatDuration:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     def test_format_duration_seconds_only(self, mock_settings: None) -> None:
@@ -1293,6 +1296,8 @@ class TestExecuteTask:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
@@ -1347,6 +1352,8 @@ class TestPollAndProcess:
             mock_settings.subprocess_timeout = 5700.0
             mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
             mock_settings.log_level = "INFO"
+            mock_settings.backoff_base_seconds = 5.0
+            mock_settings.backoff_max_seconds = 300.0
             yield mock_settings
 
     @pytest.mark.asyncio
