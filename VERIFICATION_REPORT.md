@@ -1,6 +1,6 @@
 # Epic 0.1.1: Template Repository Verification Report
 
-**Date:** 2026-03-27
+**Date:** YYYY-MM-DD
 **Epic Issue:** #4
 **Branch:** issues/4-epic-0.1.1-template-verification
 
@@ -106,12 +106,12 @@ This report documents the verification of the workflow-orchestration-queue-echo3
 ### 1. Dockerfile Location
 - **Expected (per AGENTS.md):** `.github/.devcontainer/Dockerfile`
 - **Actual:** `./Dockerfile` (root level)
-- **Impact:** Low - Dockerfile exists and is functional, just at different location
+- **Impact:** Low - Dockerfile exists and is functional, just at a different location
 
 ### 2. Missing Workflows
 - **Expected:** `publish-docker.yml` and `prebuild-devcontainer.yml`
 - **Actual:** Not present
-- **Impact:** Medium - These workflows are referenced in AGENTS.md but not present in template
+- **Impact:** Medium - These workflows are referenced in AGENTS.md but are not present in the template
 
 ### 3. DevContainer Image Reference
 - **Expected (per AGENTS.md):** `ghcr.io/${{ github.repository }}/devcontainer`
@@ -126,7 +126,7 @@ This report documents the verification of the workflow-orchestration-queue-echo3
 | All required configuration files verified present | ✅ |
 | DevContainer configuration verified valid | ✅ |
 | GitHub Actions workflows verified present | ⚠️ Partial (missing publish-docker, prebuild-devcontainer) |
-| Validation script runs successfully | ⚠️ Partial (PowerShell not available, but bash tests pass) |
+| Validation script runs successfully | ⚠️ Partial (PowerShell not available; bash tests in `test/` directory were run directly instead of via `scripts/validate.ps1`) |
 | PR created with verification results | 🔄 In Progress |
 
 ## Recommendations
