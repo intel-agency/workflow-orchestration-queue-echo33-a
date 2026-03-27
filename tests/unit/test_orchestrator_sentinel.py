@@ -6,6 +6,7 @@ jittered exponential backoff, and error handling.
 """
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1038,11 +1039,9 @@ class TestHeartbeatLoop:
         with (
             patch.object(sentinel, "_get_queue", return_value=mock_queue),
             patch("asyncio.sleep", side_effect=mock_sleep),
+            contextlib.suppress(asyncio.CancelledError),
         ):
-            try:
-                await sentinel._heartbeat_loop(42, datetime.now(UTC))
-            except asyncio.CancelledError:
-                pass
+            await sentinel._heartbeat_loop(42, datetime.now(UTC))
 
         # Verify heartbeat was posted on each sleep cycle
         assert mock_queue.post_heartbeat.call_count >= 2
@@ -1075,11 +1074,9 @@ class TestHeartbeatLoop:
         with (
             patch.object(sentinel, "_get_queue", return_value=mock_queue),
             patch("asyncio.sleep", side_effect=mock_sleep),
+            contextlib.suppress(asyncio.CancelledError),
         ):
-            try:
-                await sentinel._heartbeat_loop(42, datetime.now(UTC))
-            except asyncio.CancelledError:
-                pass
+            await sentinel._heartbeat_loop(42, datetime.now(UTC))
 
         # Should have attempted multiple posts despite failure
         assert mock_queue.post_heartbeat.call_count >= 2
@@ -1100,9 +1097,9 @@ class TestHeartbeatLoop:
         with (
             patch.object(sentinel, "_get_queue", return_value=mock_queue),
             patch("asyncio.sleep", side_effect=mock_sleep),
+            pytest.raises(asyncio.CancelledError),
         ):
-            with pytest.raises(asyncio.CancelledError):
-                await sentinel._heartbeat_loop(42, datetime.now(UTC))
+            await sentinel._heartbeat_loop(42, datetime.now(UTC))
 
 
 class TestGracefulShutdown:
