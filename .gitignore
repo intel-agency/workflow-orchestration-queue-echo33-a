@@ -428,3 +428,7 @@ test-results-pester.xml
 
 # MCP memory knowledge graph (cached via GH Actions, not committed)
 .memory/
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
