@@ -11,6 +11,7 @@ This is the persistent background service responsible for:
 import asyncio
 import contextlib
 import logging
+import random
 import signal
 import subprocess
 from datetime import UTC, datetime
@@ -130,13 +131,67 @@ class SentinelOrchestrator:
         logger.info("Received shutdown signal")
         self._shutdown_event.set()
 
+    def _calculate_backoff(self, consecutive_errors: int) -> float:
+        """Calculate backoff with jitter.
+
+        Uses exponential backoff with:
+        - Base: 5 seconds
+        - Cap: 300 seconds (5 minutes)
+        - Jitter: +0-25% randomization
+
+        Args:
+            consecutive_errors: Number of consecutive failed polls
+
+        Returns:
+            Backoff time in seconds with jitter applied
+        """
+        base = 5.0  # 5 seconds
+        max_backoff = 300.0  # 5 minutes
+
+        # Exponential backoff with cap
+        backoff = min(base * (2**consecutive_errors), max_backoff)
+
+        # Add jitter (0-25% additional delay)
+        jitter = backoff * 0.25 * random.random()
+
+        return backoff + jitter
+
     async def _run_polling_loop(self) -> None:
-        """Main polling loop for task discovery."""
+        """Main polling loop for task discovery with jittered exponential backoff."""
+        consecutive_errors = 0
+
         while self._running and not self._shutdown_event.is_set():
             try:
                 await self._poll_and_process()
+
+                # Success - reset backoff counter
+                if consecutive_errors > 0:
+                    logger.info(
+                        "Poll recovered after %d error(s), resetting backoff",
+                        consecutive_errors,
+                    )
+                consecutive_errors = 0
+
             except Exception as e:
-                logger.error("Error in polling cycle: %s", e, exc_info=True)
+                consecutive_errors += 1
+                backoff = self._calculate_backoff(consecutive_errors)
+                logger.error(
+                    "Error in polling cycle (attempt %d): %s - backing off for %.1fs",
+                    consecutive_errors,
+                    e,
+                    backoff,
+                    exc_info=True,
+                )
+
+                # Wait with backoff or until shutdown
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=backoff,
+                    )
+                    break  # Shutdown requested
+                except TimeoutError:
+                    continue  # Continue polling after backoff
 
             # Wait for next poll interval or shutdown
             try:
@@ -150,6 +205,9 @@ class SentinelOrchestrator:
 
     async def _poll_and_process(self) -> None:
         """Poll for tasks and process one if available."""
+        # Reset environment before each poll to ensure clean state
+        await self._reset_environment()
+
         queue = await self._get_queue()
 
         logger.debug("Polling for queued tasks...")
@@ -242,6 +300,9 @@ class SentinelOrchestrator:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
+            # Reset environment after task completion (success or failure)
+            await self._reset_environment()
+
     async def _run_shell_bridge(self, task: WorkItem) -> "ShellResult":
         """
         Execute the workflow via shell bridge.
@@ -332,7 +393,7 @@ Implement the required changes following the project conventions and ensure all 
                 raise
 
             return ShellResult(
-                returncode=process.returncode or 1,
+                returncode=process.returncode if process.returncode is not None else 1,
                 stdout=stdout.decode("utf-8", errors="replace"),
                 stderr=stderr.decode("utf-8", errors="replace"),
             )
@@ -360,6 +421,42 @@ Implement the required changes following the project conventions and ensure all 
                 logger.debug("Posted heartbeat for task #%d", task_id)
             except Exception as e:
                 logger.warning("Failed to post heartbeat: %s", e)
+
+    async def _reset_environment(self) -> bool:
+        """
+        Reset environment between tasks.
+
+        This method:
+        1. Stops the devcontainer via shell bridge stop command
+        2. Logs all reset actions for audit trail
+        3. Handles failures gracefully (not fatal)
+
+        Returns:
+            True if reset completed (even with warnings), False on critical errors
+        """
+        logger.info("Resetting environment for next task")
+
+        try:
+            # Stop container via shell bridge
+            bridge = settings.shell_bridge_path
+            result = await self._run_command([bridge, "stop"])
+
+            if not result.success:
+                logger.warning(
+                    "Environment reset stop command failed (exit code %d): %s",
+                    result.returncode,
+                    result.stderr,
+                )
+                # Continue anyway - not a fatal error
+            else:
+                logger.info("Environment reset stop command succeeded")
+
+            logger.info("Environment reset complete")
+            return True
+
+        except Exception as e:
+            logger.error("Environment reset failed with exception: %s", e, exc_info=True)
+            return False
 
     def _format_duration(self, start_time: datetime) -> str:
         """Format elapsed time since start."""
