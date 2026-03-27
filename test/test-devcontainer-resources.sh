@@ -57,7 +57,8 @@ test_docker_network() {
         return
     fi
     
-    local container_id=$(_get_test_container_id)
+    local container_id
+    container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
@@ -95,7 +96,8 @@ test_docker_volumes() {
         return
     fi
     
-    local container_id=$(_get_test_container_id)
+    local container_id
+    container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
@@ -112,7 +114,8 @@ test_docker_volumes() {
         echo "  INFO: Mounts: $mounts"
         
         # Check for workspace mount (Docker destinations are absolute paths)
-        local workspace_dest="/workspaces/$(basename "$REPO_ROOT")"
+        local workspace_dest
+        workspace_dest="/workspaces/$(basename "$REPO_ROOT")"
         if docker inspect --format '{{range .Mounts}}{{if eq .Destination "/workspaces"}}{{.Source}}{{end}}{{end}}' "$container_id" 2>/dev/null | grep -q .; then
             echo "  PASS: Workspace volume is mounted"
             PASS=$((PASS + 1))
@@ -168,7 +171,8 @@ test_container_labels() {
         return
     fi
     
-    local container_id=$(_get_test_container_id)
+    local container_id
+    container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
@@ -196,7 +200,8 @@ test_container_state() {
         return
     fi
     
-    local container_id=$(_get_test_container_id)
+    local container_id
+    container_id=$(_get_test_container_id)
     
     if [[ -z "$container_id" ]]; then
         echo "  SKIP: No devcontainer found (expected when not running in devcontainer)"
