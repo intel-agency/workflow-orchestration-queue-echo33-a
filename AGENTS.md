@@ -58,6 +58,8 @@ scope: repository
     <item>ZhipuAI GLM models via `ZHIPU_API_KEY`</item>
     <item>GitHub Actions + devcontainers/ci — workflow trigger, runner, reproducible container</item>
     <item>.NET SDK 10 + Aspire + Avalonia templates, Bun, uv (all in devcontainer)</item>
+    <item>Python 3.12+ with FastAPI, Pydantic, HTTPX — orchestration queue application</item>
+    <item>uv — Python package manager for dependency management</item>
     <item>MCP servers: `@modelcontextprotocol/server-sequential-thinking`, `@modelcontextprotocol/server-memory`</item>
   </tech_stack>
 
@@ -80,6 +82,14 @@ scope: repository
     <entry><path>scripts/run-devcontainer-orchestrator.sh</path><description>One-shot script: brings up the devcontainer, ensures the opencode server is running, and executes the orchestrator agent. Used by the workflow and can be invoked directly locally.</description></entry>
     <!-- Tests -->
     <entry><path>test/</path><description>Shell-based tests: devcontainer build, tool availability, prompt assembly</description></entry>
+    <!-- Python Application -->
+    <entry><path>src/orchestration_queue/</path><description>Python application package — FastAPI webhook receiver, Sentinel orchestrator, queue management</description></entry>
+    <entry><path>src/orchestration_queue/notifier_service.py</path><description>FastAPI webhook receiver (The Ear) — receives GitHub webhooks with HMAC verification</description></entry>
+    <entry><path>src/orchestration_queue/orchestrator_sentinel.py</path><description>Background polling daemon (The Brain) — polls for work items and dispatches to workers</description></entry>
+    <entry><path>tests/</path><description>Python test suite — pytest tests for models, queue, and services</description></entry>
+    <entry><path>pyproject.toml</path><description>Python project configuration — dependencies, test config, ruff linting</description></entry>
+    <entry><path>Dockerfile</path><description>Multi-stage Docker build for Python application</description></entry>
+    <entry><path>docker-compose.yml</path><description>Local development stack — notifier + sentinel services</description></entry>
 
     <opencode_server>
       <summary>
@@ -136,6 +146,23 @@ scope: repository
     </commands>
     <guidance>Add new fixture payloads to `test/fixtures/` when testing new event types.</guidance>
   </testing>
+
+  <python_application>
+    <summary>
+      The Python application implements the orchestration queue system with FastAPI webhook
+      receiver and background Sentinel orchestrator. Uses uv for dependency management.
+    </summary>
+    <commands>
+      <command>Install dependencies: `uv sync`</command>
+      <command>Run tests: `uv run pytest`</command>
+      <command>Run tests with coverage: `uv run pytest --cov=src/orchestration_queue`</command>
+      <command>Lint: `uv run ruff check src/ tests/`</command>
+      <command>Format: `uv run ruff format src/ tests/`</command>
+      <command>Run notifier service: `uv run uvicorn orchestration_queue.notifier_service:app --reload`</command>
+      <command>Run sentinel: `uv run python -m orchestration_queue.orchestrator_sentinel`</command>
+      <command>Docker compose: `docker compose up --build`</command>
+    </commands>
+  </python_application>
 
   <coding_conventions>
     <rule>Keep changes minimal and targeted.</rule>
