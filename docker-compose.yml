@@ -1,0 +1,55 @@
+# Docker Compose for workflow-orchestration-queue
+# Local development environment
+
+services:
+  # The Ear - FastAPI webhook receiver
+  notifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_ORG=${GITHUB_ORG:-intel-agency}
+      - GITHUB_REPO=${GITHUB_REPO:-workflow-orchestration-queue-echo33-a}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - orchestration-network
+
+  # The Brain - Sentinel orchestrator (optional, for background processing)
+  sentinel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "orchestration_queue.orchestrator_sentinel"]
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_ORG=${GITHUB_ORG:-intel-agency}
+      - GITHUB_REPO=${GITHUB_REPO:-workflow-orchestration-queue-echo33-a}
+      - SENTINEL_BOT_LOGIN=${SENTINEL_BOT_LOGIN:-}
+      - POLL_INTERVAL=${POLL_INTERVAL:-60}
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-300}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Mount scripts for shell bridge execution
+      - ./scripts:/app/scripts:ro
+      # Mount docker socket for container management (optional)
+      # - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - orchestration-network
+    profiles:
+      - sentinel  # Use --profile sentinel to enable
+
+networks:
+  orchestration-network:
+    driver: bridge
