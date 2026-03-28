@@ -1,6 +1,5 @@
 """Unit tests for WorkItem model and related functionality."""
 
-
 from orchestration_queue.models.work_item import (
     TaskType,
     WorkItem,

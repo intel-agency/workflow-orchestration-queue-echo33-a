@@ -10,6 +10,13 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
+from orchestration_queue.config import (
+    GitHubConfig,
+    NotifierConfig,
+    SentinelConfig,
+    Settings,
+)
+
 # Configure asyncio mode
 pytestmark = pytest.mark.asyncio(loop_scope="function")
 
@@ -150,3 +157,33 @@ async def mock_httpx_client() -> AsyncMock:
     client.patch = AsyncMock()
     client.aclose = AsyncMock()
     return client
+
+
+@pytest.fixture
+def mock_settings() -> Settings:
+    """
+    Create a mock Settings object with all required fields for testing.
+
+    This fixture creates a real Settings object with test values,
+    including the compatibility wrappers (github, sentinel, notifier).
+    """
+    settings = Settings(
+        app_env="testing",
+        log_level="INFO",
+        github_token="FAKE-GITHUB-TOKEN-FOR-TESTING-00000000",
+        github_repository="test-org/test-repo",
+        notifier_webhook_secret="FAKE-WEBHOOK-SECRET-FOR-TESTING-00000000",
+        notifier_service_name="test-service",
+        sentinel_bot_login="test-bot",
+        sentinel_poll_interval=60.0,
+        sentinel_heartbeat_interval=300.0,
+        sentinel_subprocess_timeout=5700.0,
+        sentinel_backoff_base_seconds=5.0,
+        sentinel_backoff_max_seconds=300.0,
+        sentinel_shell_bridge_path="./scripts/devcontainer-opencode.sh",
+    )
+    # Attach compatibility wrappers (same as get_settings does)
+    settings.github = GitHubConfig(settings)
+    settings.sentinel = SentinelConfig(settings)
+    settings.notifier = NotifierConfig(settings)
+    return settings

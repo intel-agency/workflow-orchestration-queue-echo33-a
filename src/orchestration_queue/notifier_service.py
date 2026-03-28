@@ -12,40 +12,16 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
 
+from orchestration_queue.config import ConfigurationError, get_settings, validate_startup
 from orchestration_queue.models.github_events import GitHubIssueEvent
 from orchestration_queue.models.work_item import WorkItemStatus
 from orchestration_queue.queue.github_queue import GitHubQueue, verify_webhook_signature
 
 logger = logging.getLogger(__name__)
 
-
-class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
-
-    # GitHub configuration
-    github_token: str = ""
-    github_org: str = ""
-    github_repo: str = ""
-
-    # Webhook security
-    webhook_secret: str = ""
-
-    # Service configuration
-    service_name: str = "workflow-orchestration-queue"
-    log_level: str = "INFO"
-
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "extra": "ignore",
-    }
-
-
-settings = Settings()
-
-# Configure logging
+# Get settings and configure logging
+settings = get_settings()
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -59,13 +35,9 @@ async def get_queue() -> GitHubQueue:
     """Get or create the GitHub queue instance."""
     global _queue
     if _queue is None:
-        if not all([settings.github_token, settings.github_org, settings.github_repo]):
-            raise RuntimeError(
-                "Missing required configuration: GITHUB_TOKEN, GITHUB_ORG, GITHUB_REPO"
-            )
         _queue = GitHubQueue(
             token=settings.github_token,
-            org=settings.github_org,
+            org=settings.github_owner,
             repo=settings.github_repo,
         )
     return _queue
@@ -74,18 +46,25 @@ async def get_queue() -> GitHubQueue:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info("Starting %s service", settings.service_name)
+    # Validate configuration at startup
+    try:
+        validate_startup()
+    except ConfigurationError as e:
+        logger.error("Configuration validation failed: %s", e)
+        raise
 
-    # Validate configuration
-    if not settings.webhook_secret:
-        logger.warning("WEBHOOK_SECRET not set - webhook verification disabled")
+    logger.info("Starting %s service", settings.notifier_service_name)
+
+    # Warn if webhook secret not set
+    if not settings.notifier_webhook_secret:
+        logger.warning("NOTIFIER_WEBHOOK_SECRET not set - webhook verification disabled")
 
     yield
 
     # Cleanup
     if _queue is not None:
         await _queue.close()
-    logger.info("Shutting down %s service", settings.service_name)
+    logger.info("Shutting down %s service", settings.notifier_service_name)
 
 
 app = FastAPI(
@@ -113,7 +92,7 @@ async def health_check() -> HealthResponse:
     """
     return HealthResponse(
         status="healthy",
-        service=settings.service_name,
+        service=settings.notifier.service_name,
         version="0.1.0",
     )
 
@@ -143,8 +122,8 @@ async def handle_github_webhook(
     payload_bytes = await request.body()
 
     # Verify webhook signature
-    if settings.webhook_secret and not verify_webhook_signature(
-        payload_bytes, x_hub_signature_256, settings.webhook_secret
+    if settings.notifier.webhook_secret and not verify_webhook_signature(
+        payload_bytes, x_hub_signature_256, settings.notifier.webhook_secret
     ):
         logger.warning("Invalid webhook signature from delivery %s", x_github_delivery)
         raise HTTPException(status_code=401, detail="Invalid signature")

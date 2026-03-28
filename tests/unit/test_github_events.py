@@ -1,6 +1,5 @@
 """Unit tests for GitHub event models."""
 
-
 from orchestration_queue.models.github_events import (
     GitHubIssueEvent,
     GitHubLabel,
