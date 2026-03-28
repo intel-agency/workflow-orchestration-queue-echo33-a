@@ -16,8 +16,7 @@ import signal
 import subprocess
 from datetime import UTC, datetime
 
-from pydantic_settings import BaseSettings
-
+from orchestration_queue.config import ConfigurationError, get_settings, validate_startup
 from orchestration_queue.models.work_item import (
     TaskType,
     WorkItem,
@@ -28,41 +27,8 @@ from orchestration_queue.queue.github_queue import GitHubQueue
 
 logger = logging.getLogger(__name__)
 
-
-class Settings(BaseSettings):
-    """Sentinel service settings."""
-
-    # GitHub configuration
-    github_token: str = ""
-    github_org: str = ""
-    github_repo: str = ""
-
-    # Sentinel configuration
-    sentinel_bot_login: str = ""  # GitHub username for claiming tasks
-    poll_interval: float = 60.0
-    heartbeat_interval: float = 300.0  # 5 minutes
-    subprocess_timeout: float = 5700.0  # 95 minutes (safety net)
-
-    # Backoff configuration
-    backoff_base_seconds: float = 5.0  # Base backoff interval
-    backoff_max_seconds: float = 300.0  # Maximum backoff (5 minutes)
-
-    # Shell bridge configuration
-    shell_bridge_path: str = "./scripts/devcontainer-opencode.sh"
-
-    # Service configuration
-    log_level: str = "INFO"
-
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "extra": "ignore",
-    }
-
-
-settings = Settings()
-
-# Configure logging
+# Get settings and configure logging
+settings = get_settings()
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -87,36 +53,35 @@ class SentinelOrchestrator:
         self._shutdown_event = asyncio.Event()
         self._queue: GitHubQueue | None = None
 
-        # Validate configuration
+        # Validate configuration at startup
         self._validate_config()
 
     def _validate_config(self) -> None:
         """Validate required configuration at startup."""
-        required = ["github_token", "github_org", "github_repo"]
-        missing = [k for k in required if not getattr(settings, k, None)]
+        try:
+            validate_startup()
+        except ConfigurationError:
+            raise
 
-        if missing:
-            raise RuntimeError(f"Missing required configuration: {', '.join(missing)}")
-
-        if not settings.sentinel_bot_login:
+        if not settings.sentinel.bot_login:
             logger.warning("SENTINEL_BOT_LOGIN not set - distributed locking disabled")
 
     async def _get_queue(self) -> GitHubQueue:
         """Get or create the GitHub queue instance."""
         if self._queue is None:
             self._queue = GitHubQueue(
-                token=settings.github_token,
-                org=settings.github_org,
-                repo=settings.github_repo,
-                poll_interval=settings.poll_interval,
+                token=settings.github.token,
+                org=settings.github.owner,
+                repo=settings.github.repo,
+                poll_interval=settings.sentinel.poll_interval,
             )
         return self._queue
 
     async def start(self) -> None:
         """Start the sentinel polling loop."""
         logger.info("Starting Sentinel Orchestrator")
-        logger.info("Repository: %s/%s", settings.github_org, settings.github_repo)
-        logger.info("Poll interval: %.1f seconds", settings.poll_interval)
+        logger.info("Repository: %s", settings.github.repository)
+        logger.info("Poll interval: %.1f seconds", settings.sentinel.poll_interval)
 
         self._running = True
 
@@ -139,8 +104,8 @@ class SentinelOrchestrator:
         """Calculate backoff with jitter.
 
         Uses exponential backoff with:
-        - Base: configurable via settings.backoff_base_seconds
-        - Cap: configurable via settings.backoff_max_seconds
+        - Base: configurable via settings.sentinel.backoff_base_seconds
+        - Cap: configurable via settings.sentinel.backoff_max_seconds
         - Jitter: +0-25% randomization
 
         Args:
@@ -149,8 +114,8 @@ class SentinelOrchestrator:
         Returns:
             Backoff time in seconds with jitter applied
         """
-        base = settings.backoff_base_seconds
-        max_backoff = settings.backoff_max_seconds
+        base = settings.sentinel.backoff_base_seconds
+        max_backoff = settings.sentinel.backoff_max_seconds
 
         # Exponential backoff with cap
         backoff = min(base * (2**consecutive_errors), max_backoff)
@@ -202,7 +167,7 @@ class SentinelOrchestrator:
             try:
                 await asyncio.wait_for(
                     self._shutdown_event.wait(),
-                    timeout=settings.poll_interval,
+                    timeout=settings.sentinel.poll_interval,
                 )
                 break  # Shutdown requested
             except TimeoutError:
@@ -224,12 +189,12 @@ class SentinelOrchestrator:
         # Process the first available task
         task = tasks[0]
 
-        if not settings.sentinel_bot_login:
+        if not settings.sentinel.bot_login:
             logger.warning("Cannot claim task without SENTINEL_BOT_LOGIN")
             return
 
         # Try to claim the task
-        claimed = await queue.claim_task(task.id, settings.sentinel_bot_login)
+        claimed = await queue.claim_task(task.id, settings.sentinel.bot_login)
 
         if not claimed:
             logger.info("Failed to claim task #%d (likely claimed by another sentinel)", task.id)
@@ -259,7 +224,7 @@ class SentinelOrchestrator:
             f"- **Issue:** #{task.id}\n"
             f"- **Type:** {task.task_type.value}\n"
             f"- **Started:** {start_time.isoformat()}\n"
-            f"- **Sentinel:** {settings.sentinel_bot_login}"
+            f"- **Sentinel:** {settings.sentinel.bot_login}"
         )
         await queue.post_heartbeat(task.id, scrub_secrets(start_message))
 
@@ -315,7 +280,7 @@ class SentinelOrchestrator:
         3. prompt - Execute workflow
         4. stop - Cleanup (optional)
         """
-        bridge = settings.shell_bridge_path
+        bridge = settings.sentinel.shell_bridge_path
         instruction = self._build_instruction(task)
 
         # Step 1: Provision
@@ -387,7 +352,7 @@ Implement the required changes following the project conventions and ensure all 
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(input_text.encode() if input_text else None),
-                    timeout=settings.subprocess_timeout,
+                    timeout=settings.sentinel.subprocess_timeout,
                 )
             except TimeoutError:
                 process.kill()
@@ -413,7 +378,7 @@ Implement the required changes following the project conventions and ensure all 
         queue = await self._get_queue()
 
         while True:
-            await asyncio.sleep(settings.heartbeat_interval)
+            await asyncio.sleep(settings.sentinel.heartbeat_interval)
 
             elapsed = self._format_duration(start_time)
             message = f"⏱️ **Heartbeat** - Elapsed: {elapsed}"
@@ -440,7 +405,7 @@ Implement the required changes following the project conventions and ensure all 
 
         try:
             # Stop container via shell bridge
-            bridge = settings.shell_bridge_path
+            bridge = settings.sentinel.shell_bridge_path
             result = await self._run_command([bridge, "stop"])
 
             if not result.success:

@@ -11,31 +11,95 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+from orchestration_queue.config import (
+    GitHubConfig,
+    NotifierConfig,
+    SentinelConfig,
+    Settings,
+)
+
+
+def create_test_settings(
+    github_token: str = "FAKE-GITHUB-TOKEN-FOR-TESTING-00000000",
+    github_repository: str = "test-org/test-repo",
+    sentinel_bot_login: str = "test-bot",
+    sentinel_poll_interval: float = 60.0,
+    sentinel_heartbeat_interval: float = 300.0,
+    sentinel_subprocess_timeout: float = 5700.0,
+    sentinel_backoff_base_seconds: float = 5.0,
+    sentinel_backoff_max_seconds: float = 300.0,
+    sentinel_shell_bridge_path: str = "./scripts/devcontainer-opencode.sh",
+    log_level: str = "INFO",
+    notifier_webhook_secret: str = "FAKE-WEBHOOK-SECRET-FOR-TESTING-00000000",
+    notifier_service_name: str = "test-service",
+    app_env: str = "testing",
+) -> Settings:
+    """Create a test Settings object with all required fields."""
+    settings = Settings(
+        app_env=app_env,
+        log_level=log_level,
+        github_token=github_token,
+        github_repository=github_repository,
+        notifier_webhook_secret=notifier_webhook_secret,
+        notifier_service_name=notifier_service_name,
+        sentinel_bot_login=sentinel_bot_login,
+        sentinel_poll_interval=sentinel_poll_interval,
+        sentinel_heartbeat_interval=sentinel_heartbeat_interval,
+        sentinel_subprocess_timeout=sentinel_subprocess_timeout,
+        sentinel_backoff_base_seconds=sentinel_backoff_base_seconds,
+        sentinel_backoff_max_seconds=sentinel_backoff_max_seconds,
+        sentinel_shell_bridge_path=sentinel_shell_bridge_path,
+    )
+    # Attach compatibility wrappers
+    settings.github = GitHubConfig(settings)
+    settings.sentinel = SentinelConfig(settings)
+    settings.notifier = NotifierConfig(settings)
+    return settings
+
+
+# Create a shared test settings object
+_TEST_SETTINGS = create_test_settings()
+
+
+@pytest.fixture(autouse=True)
+def mock_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Auto-use fixture to mock the config module for all tests.
+
+    This patches get_settings and validate_startup where they are used
+    (in orchestrator_sentinel module) to bypass config validation.
+    """
+    # Patch the module-level settings in orchestrator_sentinel
+    import orchestration_queue.orchestrator_sentinel as sentinel_module
+
+    monkeypatch.setattr(sentinel_module, "settings", _TEST_SETTINGS, raising=False)
+
+    # Patch validate_startup to return test settings
+    def mock_validate_startup() -> Settings:
+        return _TEST_SETTINGS
+
+    monkeypatch.setattr(
+        "orchestration_queue.orchestrator_sentinel.validate_startup",
+        mock_validate_startup,
+    )
+
+    # Patch get_settings to return test settings
+    def mock_get_settings() -> Settings:
+        return _TEST_SETTINGS
+
+    monkeypatch.setattr(
+        "orchestration_queue.orchestrator_sentinel.get_settings",
+        mock_get_settings,
+    )
 
 
 class TestCalculateBackoff:
     """Tests for SentinelOrchestrator._calculate_backoff method."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-GITHUB-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
-    def test_backoff_increases_on_consecutive_errors(self, mock_settings: None) -> None:
+    def test_backoff_increases_on_consecutive_errors(self) -> None:
         """Test that backoff increases exponentially with consecutive errors."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # Use fixed random to get deterministic jitter
@@ -55,8 +119,10 @@ class TestCalculateBackoff:
         assert backoff_2 == pytest.approx(20.0, rel=0.01)
         assert backoff_3 == pytest.approx(40.0, rel=0.01)
 
-    def test_backoff_caps_at_max(self, mock_settings: None) -> None:
+    def test_backoff_caps_at_max(self) -> None:
         """Test that backoff is capped at 300 seconds (5 minutes)."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # With jitter (random.random() = 0.5):
@@ -69,8 +135,10 @@ class TestCalculateBackoff:
         assert backoff == pytest.approx(337.5, rel=0.01)
         assert backoff <= 300.0 * 1.25  # Max with max jitter
 
-    def test_backoff_caps_at_max_no_jitter(self, mock_settings: None) -> None:
+    def test_backoff_caps_at_max_no_jitter(self) -> None:
         """Test that backoff base is capped at 300 even with high error count."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # Without jitter, backoff should be exactly 300 at high error counts
@@ -79,8 +147,10 @@ class TestCalculateBackoff:
 
         assert backoff == pytest.approx(300.0, rel=0.01)
 
-    def test_jitter_is_applied(self, mock_settings: None) -> None:
+    def test_jitter_is_applied(self) -> None:
         """Test that jitter is applied to backoff values."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # Collect multiple backoff values for the same error count
@@ -99,8 +169,10 @@ class TestCalculateBackoff:
         unique_values = set(backoffs)
         assert len(unique_values) > 1, "Jitter should produce varying values"
 
-    def test_jitter_range(self, mock_settings: None) -> None:
+    def test_jitter_range(self) -> None:
         """Test that jitter adds 0-25% to the backoff value."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # Test with random.random() = 0 (no jitter)
@@ -114,8 +186,10 @@ class TestCalculateBackoff:
             # 10 + (10 * 0.25 * 1) = 10 + 2.5 = 12.5
             assert backoff_max == pytest.approx(12.5, rel=0.01)
 
-    def test_first_error_backoff(self, mock_settings: None) -> None:
+    def test_first_error_backoff(self) -> None:
         """Test backoff for first error is around 5 seconds."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # Collect samples to verify range
@@ -129,26 +203,11 @@ class TestCalculateBackoff:
 class TestPollingLoopBackoff:
     """Tests for backoff behavior in the polling loop."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-GITHUB-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_backoff_resets_on_successful_poll(self, mock_settings: None) -> None:
+    async def test_backoff_resets_on_successful_poll(self) -> None:
         """Test that consecutive_errors counter resets after successful poll."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
         sentinel._running = True
 
@@ -171,8 +230,10 @@ class TestPollingLoopBackoff:
         assert call_count == 3
 
     @pytest.mark.asyncio
-    async def test_backoff_increases_on_errors(self, mock_settings: None) -> None:
+    async def test_backoff_increases_on_errors(self) -> None:
         """Test that backoff increases on consecutive errors."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
         sentinel._running = True
 
@@ -204,8 +265,10 @@ class TestPollingLoopBackoff:
         assert sleep_times[2] > sleep_times[1]
 
     @pytest.mark.asyncio
-    async def test_backoff_uses_calculate_backoff_method(self, mock_settings: None) -> None:
+    async def test_backoff_uses_calculate_backoff_method(self) -> None:
         """Test that the polling loop uses _calculate_backoff for error delays."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
         sentinel._running = True
 
@@ -248,26 +311,11 @@ class TestPollingLoopBackoff:
 class TestResetEnvironment:
     """Tests for SentinelOrchestrator._reset_environment method."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-GITHUB-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_reset_calls_shell_bridge_stop(self, mock_settings: None) -> None:
+    async def test_reset_calls_shell_bridge_stop(self) -> None:
         """Test that _reset_environment calls shell bridge stop command."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # Mock _run_command to return success
@@ -287,8 +335,10 @@ class TestResetEnvironment:
             assert result is True
 
     @pytest.mark.asyncio
-    async def test_reset_returns_true_on_success(self, mock_settings: None) -> None:
+    async def test_reset_returns_true_on_success(self) -> None:
         """Test that _reset_environment returns True on successful stop."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         with patch.object(
@@ -304,8 +354,10 @@ class TestResetEnvironment:
             assert result is True
 
     @pytest.mark.asyncio
-    async def test_reset_returns_true_on_command_failure(self, mock_settings: None) -> None:
+    async def test_reset_returns_true_on_command_failure(self) -> None:
         """Test that _reset_environment returns True even when stop fails (graceful handling)."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         with patch.object(
@@ -322,8 +374,10 @@ class TestResetEnvironment:
             assert result is True
 
     @pytest.mark.asyncio
-    async def test_reset_returns_false_on_exception(self, mock_settings: None) -> None:
+    async def test_reset_returns_false_on_exception(self) -> None:
         """Test that _reset_environment returns False on unexpected exception."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         with patch.object(
@@ -335,8 +389,10 @@ class TestResetEnvironment:
             assert result is False
 
     @pytest.mark.asyncio
-    async def test_reset_logs_actions(self, mock_settings: None) -> None:
+    async def test_reset_logs_actions(self) -> None:
         """Test that _reset_environment logs all actions for audit trail."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         with (
@@ -359,8 +415,10 @@ class TestResetEnvironment:
             assert any("Environment reset complete" in str(call) for call in log_calls)
 
     @pytest.mark.asyncio
-    async def test_reset_logs_warning_on_failure(self, mock_settings: None) -> None:
+    async def test_reset_logs_warning_on_failure(self) -> None:
         """Test that _reset_environment logs warning when stop command fails."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         with (
@@ -385,29 +443,11 @@ class TestResetEnvironment:
 class TestResetEnvironmentIntegration:
     """Tests for _reset_environment integration with task execution."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-GITHUB-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_reset_called_after_task_success(self, mock_settings: None) -> None:
+    async def test_reset_called_after_task_success(self) -> None:
         """Test that _reset_environment is called after successful task execution."""
-        from unittest.mock import AsyncMock
-
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -444,11 +484,10 @@ class TestResetEnvironmentIntegration:
             mock_reset.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_reset_called_after_task_failure(self, mock_settings: None) -> None:
+    async def test_reset_called_after_task_failure(self) -> None:
         """Test that _reset_environment is called even when task execution fails."""
-        from unittest.mock import AsyncMock
-
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -515,50 +554,72 @@ class TestShellResult:
 class TestValidateConfig:
     """Tests for SentinelOrchestrator._validate_config method."""
 
-    def test_init_raises_on_missing_token(self) -> None:
+    def test_init_raises_on_missing_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that initialization fails when GITHUB_TOKEN is missing."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = ""
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
-            with pytest.raises(RuntimeError, match="Missing required configuration.*github_token"):
-                SentinelOrchestrator()
+        # Create settings with empty token
+        test_settings = create_test_settings(github_token="")
 
-    def test_init_raises_on_missing_org(self) -> None:
-        """Test that initialization fails when GITHUB_ORG is missing."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = ""
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
+        def mock_validate() -> Settings:
+            from orchestration_queue.config.exceptions import ConfigurationError
 
-            with pytest.raises(RuntimeError, match="Missing required configuration.*github_org"):
-                SentinelOrchestrator()
+            raise ConfigurationError(
+                "Missing required GitHub token",
+                field_name="github.token",
+            )
 
-    def test_init_raises_on_missing_repo(self) -> None:
-        """Test that initialization fails when GITHUB_REPO is missing."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = ""
-            mock_settings.sentinel_bot_login = "test-bot"
+        monkeypatch.setattr(
+            "orchestration_queue.orchestrator_sentinel.validate_startup",
+            mock_validate,
+        )
+        monkeypatch.setattr(
+            "orchestration_queue.orchestrator_sentinel.settings",
+            test_settings,
+        )
 
-            with pytest.raises(RuntimeError, match="Missing required configuration.*github_repo"):
-                SentinelOrchestrator()
+        with pytest.raises(Exception, match="Missing required GitHub token"):
+            SentinelOrchestrator()
 
-    def test_init_warns_on_missing_bot_login(self) -> None:
+    def test_init_raises_on_missing_repository(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that initialization fails when GITHUB_REPOSITORY is missing."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
+        # Create settings with empty repository
+        test_settings = create_test_settings(
+            github_token="FAKE-TOKEN-FOR-TESTING-00000000", github_repository=""
+        )
+
+        def mock_validate() -> Settings:
+            from orchestration_queue.config.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                "Missing required GitHub repository",
+                field_name="github.repository",
+            )
+
+        monkeypatch.setattr(
+            "orchestration_queue.orchestrator_sentinel.validate_startup",
+            mock_validate,
+        )
+        monkeypatch.setattr(
+            "orchestration_queue.orchestrator_sentinel.settings",
+            test_settings,
+        )
+
+        with pytest.raises(Exception, match="Missing required GitHub repository"):
+            SentinelOrchestrator()
+
+    def test_init_warns_on_missing_bot_login(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that initialization warns when SENTINEL_BOT_LOGIN is missing."""
-        with (
-            patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings,
-            patch("orchestration_queue.orchestrator_sentinel.logger") as mock_logger,
-        ):
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = ""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
+        # Create settings with empty bot login
+        test_settings = create_test_settings(sentinel_bot_login="")
+
+        monkeypatch.setattr("orchestration_queue.orchestrator_sentinel.settings", test_settings)
+
+        with patch("orchestration_queue.orchestrator_sentinel.logger") as mock_logger:
             SentinelOrchestrator()
 
             # Verify warning was logged
@@ -567,40 +628,21 @@ class TestValidateConfig:
 
     def test_init_succeeds_with_all_config(self) -> None:
         """Test that initialization succeeds with all required config."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
-            sentinel = SentinelOrchestrator()
-            assert sentinel._running is False
-            assert sentinel._queue is None
+        sentinel = SentinelOrchestrator()
+        assert sentinel._running is False
+        assert sentinel._queue is None
 
 
 class TestGetQueue:
     """Tests for SentinelOrchestrator._get_queue method."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_get_queue_creates_queue_lazily(self, mock_settings: None) -> None:
+    async def test_get_queue_creates_queue_lazily(self) -> None:
         """Test that _get_queue creates a GitHubQueue on first call."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
         assert sentinel._queue is None
 
@@ -610,8 +652,10 @@ class TestGetQueue:
         assert sentinel._queue is queue
 
     @pytest.mark.asyncio
-    async def test_get_queue_returns_same_instance(self, mock_settings: None) -> None:
+    async def test_get_queue_returns_same_instance(self) -> None:
         """Test that _get_queue returns the same instance on subsequent calls."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         queue1 = await sentinel._get_queue()
@@ -623,26 +667,11 @@ class TestGetQueue:
 class TestRunCommand:
     """Tests for SentinelOrchestrator._run_command method (Story 2 & 6)."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_run_command_success(self, mock_settings: None) -> None:
+    async def test_run_command_success(self) -> None:
         """Test _run_command with successful command execution."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         # Create mock process with proper attributes
@@ -664,8 +693,10 @@ class TestRunCommand:
             assert result.stderr == ""
 
     @pytest.mark.asyncio
-    async def test_run_command_failure_nonzero_exit(self, mock_settings: None) -> None:
+    async def test_run_command_failure_nonzero_exit(self) -> None:
         """Test _run_command with non-zero exit code."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         mock_process = MagicMock()
@@ -685,8 +716,10 @@ class TestRunCommand:
             assert result.stderr == "error message"
 
     @pytest.mark.asyncio
-    async def test_run_command_with_input_text(self, mock_settings: None) -> None:
+    async def test_run_command_with_input_text(self) -> None:
         """Test _run_command with stdin input."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         mock_process = MagicMock()
@@ -710,8 +743,10 @@ class TestRunCommand:
             assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_run_command_timeout_kills_process(self, mock_settings: None) -> None:
+    async def test_run_command_timeout_kills_process(self) -> None:
         """Test that _run_command kills process on timeout (Story 6)."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         mock_process = MagicMock()
@@ -732,35 +767,31 @@ class TestRunCommand:
             mock_process.wait.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_run_command_timeout_value_is_95_minutes(self, mock_settings: None) -> None:
+    async def test_run_command_timeout_value_is_95_minutes(self) -> None:
         """Test that timeout value matches 95 minutes (5700 seconds)."""
-        # Verify the settings value
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.subprocess_timeout = 5700.0  # 95 minutes = 95 * 60 = 5700
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
-            sentinel = SentinelOrchestrator()
-            mock_process = MagicMock()
-            mock_process.returncode = 0
-            mock_process.kill = MagicMock()
-            mock_process.wait = AsyncMock()
+        sentinel = SentinelOrchestrator()
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.kill = MagicMock()
+        mock_process.wait = AsyncMock()
 
-            with (
-                patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)),
-                patch("asyncio.wait_for", AsyncMock(return_value=(b"", b""))) as mock_wait_for,
-            ):
-                await sentinel._run_command(["test"])
+        with (
+            patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_process)),
+            patch("asyncio.wait_for", AsyncMock(return_value=(b"", b""))) as mock_wait_for,
+        ):
+            await sentinel._run_command(["test"])
 
-                # Verify timeout was passed correctly
-                call_kwargs = mock_wait_for.call_args[1]
-                assert call_kwargs["timeout"] == 5700.0
+            # Verify timeout was passed correctly
+            call_kwargs = mock_wait_for.call_args[1]
+            assert call_kwargs["timeout"] == 5700.0
 
     @pytest.mark.asyncio
-    async def test_run_command_exception_returns_error_result(self, mock_settings: None) -> None:
+    async def test_run_command_exception_returns_error_result(self) -> None:
         """Test that _run_command returns error ShellResult on exception."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         with patch("asyncio.create_subprocess_exec", side_effect=OSError("Command not found")):
@@ -775,27 +806,11 @@ class TestRunCommand:
 class TestRunShellBridge:
     """Tests for SentinelOrchestrator._run_shell_bridge method (Story 2)."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_shell_bridge_up_start_prompt_sequence(self, mock_settings: None) -> None:
+    async def test_shell_bridge_up_start_prompt_sequence(self) -> None:
         """Test shell bridge executes up, start, prompt in sequence."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -823,9 +838,10 @@ class TestRunShellBridge:
             assert call_sequence == ["up", "start", "prompt"]
 
     @pytest.mark.asyncio
-    async def test_shell_bridge_fails_on_up(self, mock_settings: None) -> None:
+    async def test_shell_bridge_fails_on_up(self) -> None:
         """Test shell bridge returns failure when 'up' command fails."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -855,9 +871,10 @@ class TestRunShellBridge:
             assert mock_run.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_shell_bridge_fails_on_start(self, mock_settings: None) -> None:
+    async def test_shell_bridge_fails_on_start(self) -> None:
         """Test shell bridge returns failure when 'start' command fails."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -890,26 +907,10 @@ class TestRunShellBridge:
 class TestBuildInstruction:
     """Tests for SentinelOrchestrator._build_instruction method."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
-    def test_build_instruction_plan_task(self, mock_settings: None) -> None:
+    def test_build_instruction_plan_task(self) -> None:
         """Test instruction building for PLAN task type."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -930,9 +931,10 @@ class TestBuildInstruction:
         assert "Create new feature" in instruction
         assert "Implement user authentication" in instruction
 
-    def test_build_instruction_bugfix_task(self, mock_settings: None) -> None:
+    def test_build_instruction_bugfix_task(self) -> None:
         """Test instruction building for BUGFIX task type."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -953,9 +955,10 @@ class TestBuildInstruction:
         assert "Fix login crash" in instruction
         assert "App crashes on login" in instruction
 
-    def test_build_instruction_implement_task(self, mock_settings: None) -> None:
+    def test_build_instruction_implement_task(self) -> None:
         """Test instruction building for IMPLEMENT task type."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -976,9 +979,10 @@ class TestBuildInstruction:
         assert "Add API endpoint" in instruction
         assert "Create REST API for users" in instruction
 
-    def test_build_instruction_with_no_body(self, mock_settings: None) -> None:
+    def test_build_instruction_with_no_body(self) -> None:
         """Test instruction building when body is None."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1000,27 +1004,12 @@ class TestBuildInstruction:
 class TestHeartbeatLoop:
     """Tests for SentinelOrchestrator._heartbeat_loop method (Story 3)."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_heartbeat_posts_at_interval(self, mock_settings: None) -> None:
+    async def test_heartbeat_posts_at_interval(self) -> None:
         """Test that heartbeat posts comments at the configured interval."""
         from datetime import UTC, datetime
+
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1046,9 +1035,11 @@ class TestHeartbeatLoop:
         assert mock_queue.post_heartbeat.call_count >= 2
 
     @pytest.mark.asyncio
-    async def test_heartbeat_continues_on_failure(self, mock_settings: None) -> None:
+    async def test_heartbeat_continues_on_failure(self) -> None:
         """Test that heartbeat loop continues even when posting fails."""
         from datetime import UTC, datetime
+
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1081,9 +1072,11 @@ class TestHeartbeatLoop:
         assert mock_queue.post_heartbeat.call_count >= 2
 
     @pytest.mark.asyncio
-    async def test_heartbeat_cancellation(self, mock_settings: None) -> None:
+    async def test_heartbeat_cancellation(self) -> None:
         """Test that heartbeat loop can be cancelled."""
         from datetime import UTC, datetime
+
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1104,25 +1097,10 @@ class TestHeartbeatLoop:
 class TestGracefulShutdown:
     """Tests for graceful shutdown handling (Story 4)."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
-    def test_handle_shutdown_signal_sets_event(self, mock_settings: None) -> None:
+    def test_handle_shutdown_signal_sets_event(self) -> None:
         """Test that _handle_shutdown_signal sets the shutdown event."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
         assert not sentinel._shutdown_event.is_set()
 
@@ -1131,8 +1109,10 @@ class TestGracefulShutdown:
         assert sentinel._shutdown_event.is_set()
 
     @pytest.mark.asyncio
-    async def test_run_polling_loop_exits_on_shutdown(self, mock_settings: None) -> None:
+    async def test_run_polling_loop_exits_on_shutdown(self) -> None:
         """Test that _run_polling_loop exits when shutdown signal is received."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
         sentinel._running = True
         sentinel._shutdown_event.set()  # Set shutdown before loop starts
@@ -1150,8 +1130,10 @@ class TestGracefulShutdown:
         assert poll_count == 0
 
     @pytest.mark.asyncio
-    async def test_cleanup_closes_queue(self, mock_settings: None) -> None:
+    async def test_cleanup_closes_queue(self) -> None:
         """Test that _cleanup closes the queue if it exists."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
 
         mock_queue = AsyncMock()
@@ -1164,8 +1146,10 @@ class TestGracefulShutdown:
         assert sentinel._running is False
 
     @pytest.mark.asyncio
-    async def test_cleanup_handles_no_queue(self, mock_settings: None) -> None:
+    async def test_cleanup_handles_no_queue(self) -> None:
         """Test that _cleanup handles case where queue is None."""
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
+
         sentinel = SentinelOrchestrator()
         sentinel._queue = None
         sentinel._running = True
@@ -1176,9 +1160,11 @@ class TestGracefulShutdown:
         assert sentinel._running is False
 
     @pytest.mark.asyncio
-    async def test_start_registers_signal_handlers(self, mock_settings: None) -> None:
+    async def test_start_registers_signal_handlers(self) -> None:
         """Test that start() registers SIGTERM and SIGINT handlers."""
         import signal
+
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1213,26 +1199,11 @@ class TestGracefulShutdown:
 class TestFormatDuration:
     """Tests for SentinelOrchestrator._format_duration method."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
-    def test_format_duration_seconds_only(self, mock_settings: None) -> None:
+    def test_format_duration_seconds_only(self) -> None:
         """Test formatting duration less than a minute."""
         from datetime import UTC, datetime, timedelta
+
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1251,9 +1222,11 @@ class TestFormatDuration:
             assert "s" in result
             assert "m" not in result
 
-    def test_format_duration_minutes_and_seconds(self, mock_settings: None) -> None:
+    def test_format_duration_minutes_and_seconds(self) -> None:
         """Test formatting duration with minutes."""
         from datetime import UTC, datetime, timedelta
+
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1265,9 +1238,11 @@ class TestFormatDuration:
         assert "m" in result
         assert "s" in result
 
-    def test_format_duration_hours_and_minutes(self, mock_settings: None) -> None:
+    def test_format_duration_hours_and_minutes(self) -> None:
         """Test formatting duration with hours."""
         from datetime import UTC, datetime, timedelta
+
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1283,27 +1258,11 @@ class TestFormatDuration:
 class TestExecuteTask:
     """Tests for task execution flow."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_execute_task_handles_infra_failure(self, mock_settings: None) -> None:
+    async def test_execute_task_handles_infra_failure(self) -> None:
         """Test that _execute_task handles exceptions as INFRA_FAILURE."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1339,27 +1298,11 @@ class TestExecuteTask:
 class TestPollAndProcess:
     """Tests for _poll_and_process task claiming and execution flow."""
 
-    @pytest.fixture
-    def mock_settings(self) -> None:
-        """Mock settings to avoid config validation errors."""
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = "test-bot"
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
-            mock_settings.backoff_base_seconds = 5.0
-            mock_settings.backoff_max_seconds = 300.0
-            yield mock_settings
-
     @pytest.mark.asyncio
-    async def test_poll_finds_and_claims_task(self, mock_settings: None) -> None:
+    async def test_poll_finds_and_claims_task(self) -> None:
         """Test that _poll_and_process finds and claims a task."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1392,9 +1335,10 @@ class TestPollAndProcess:
             mock_execute.assert_called_once_with(task)
 
     @pytest.mark.asyncio
-    async def test_poll_claim_fails(self, mock_settings: None) -> None:
+    async def test_poll_claim_fails(self) -> None:
         """Test that _poll_and_process handles claim failure gracefully."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
@@ -1423,54 +1367,50 @@ class TestPollAndProcess:
             mock_execute.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_poll_no_bot_login_configured(self) -> None:
+    async def test_poll_no_bot_login_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that _poll_and_process warns when no bot login is configured."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
-        with patch("orchestration_queue.orchestrator_sentinel.settings") as mock_settings:
-            mock_settings.github_token = "FAKE-TOKEN-FOR-TESTING-00000000"
-            mock_settings.github_org = "test-org"
-            mock_settings.github_repo = "test-repo"
-            mock_settings.sentinel_bot_login = ""  # Empty bot login
-            mock_settings.poll_interval = 60.0
-            mock_settings.heartbeat_interval = 300.0
-            mock_settings.subprocess_timeout = 5700.0
-            mock_settings.shell_bridge_path = "./scripts/devcontainer-opencode.sh"
-            mock_settings.log_level = "INFO"
+        # Create settings with empty bot login
+        test_settings = create_test_settings(sentinel_bot_login="")
 
-            sentinel = SentinelOrchestrator()
+        monkeypatch.setattr("orchestration_queue.orchestrator_sentinel.settings", test_settings)
 
-            task = WorkItem(
-                id=42,
-                title="Test Task",
-                body="Test body",
-                task_type=TaskType.IMPLEMENT,
-                status=WorkItemStatus.QUEUED,
-                repository="test-org/test-repo",
-                author="test-author",
-            )
+        sentinel = SentinelOrchestrator()
 
-            mock_queue = AsyncMock()
-            mock_queue.fetch_queued_tasks = AsyncMock(return_value=[task])
+        task = WorkItem(
+            id=42,
+            title="Test Task",
+            body="Test body",
+            task_type=TaskType.IMPLEMENT,
+            status=WorkItemStatus.QUEUED,
+            repository="test-org/test-repo",
+            author="test-author",
+        )
 
-            with (
-                patch.object(sentinel, "_reset_environment"),
-                patch.object(sentinel, "_get_queue", return_value=mock_queue),
-                patch.object(sentinel, "_execute_task") as mock_execute,
-                patch("orchestration_queue.orchestrator_sentinel.logger") as mock_logger,
-            ):
-                await sentinel._poll_and_process()
+        mock_queue = AsyncMock()
+        mock_queue.fetch_queued_tasks = AsyncMock(return_value=[task])
 
-                # Verify warning was logged
-                warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
-                assert any("SENTINEL_BOT_LOGIN" in str(call) for call in warning_calls)
-                # Verify execute was NOT called
-                mock_execute.assert_not_called()
+        with (
+            patch.object(sentinel, "_reset_environment"),
+            patch.object(sentinel, "_get_queue", return_value=mock_queue),
+            patch.object(sentinel, "_execute_task") as mock_execute,
+            patch("orchestration_queue.orchestrator_sentinel.logger") as mock_logger,
+        ):
+            await sentinel._poll_and_process()
+
+            # Verify warning was logged
+            warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+            assert any("SENTINEL_BOT_LOGIN" in str(call) for call in warning_calls)
+            # Verify execute was NOT called
+            mock_execute.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_poll_logs_found_tasks(self, mock_settings: None) -> None:
+    async def test_poll_logs_found_tasks(self) -> None:
         """Test that _poll_and_process logs when tasks are found."""
         from orchestration_queue.models.work_item import TaskType, WorkItem, WorkItemStatus
+        from orchestration_queue.orchestrator_sentinel import SentinelOrchestrator
 
         sentinel = SentinelOrchestrator()
 
